@@ -62,6 +62,7 @@
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.DirectoryServices" />
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.Numerics" />
     <Reference Include="System.Web" />
@@ -153,6 +154,9 @@
     <Compile Include="SuggestionProviders\OtterEnvironmentNameSuggestionProvider.cs" />
     <Compile Include="SuggestionProviders\OtterServerNameSuggestionProvider.cs" />
     <Compile Include="SuggestionProviders\OtterCredentialSuggestionProvider.cs" />
+    <Compile Include="UserDirectories\LDAP.cs" />
+    <Compile Include="UserDirectories\ADUserDirectory.cs" />
+    <Compile Include="UserDirectories\PrincipalId.cs" />
     <Compile Include="VariableFunctions\Executions\ExecutionIdVariableFunction.cs" />
     <Compile Include="VariableFunctions\Executions\WorkingDirectoryVariableFunction.cs" />
   </ItemGroup>
