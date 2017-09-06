@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -21,7 +21,7 @@ namespace Inedo.Extensions.Operations.ProGet
         public static async Task DeployAsync(IOperationExecutionContext context, IProGetPackageInstallTemplate template, ILogger log, string installationReason, bool recordDeployment)
         {
             var fileOps = await context.Agent.GetServiceAsync<IFileOperationsExecuter>().ConfigureAwait(false);
-            var client = new ProGetClient(template.FeedUrl, template.FeedName, template.UserName, template.Password, log);
+            var client = new ProGetClient(template.FeedUrl, template.FeedName, template.UserName, template.Password, log, context.CancellationToken);
 
             try
             {
@@ -61,7 +61,7 @@ namespace Inedo.Extensions.Operations.ProGet
                     {
                         using (var remote = await fileOps.OpenFileAsync(tempZipFileName, FileMode.CreateNew, FileAccess.Write).ConfigureAwait(false))
                         {
-                            await content.CopyToAsync(remote).ConfigureAwait(false);
+                            await content.CopyToAsync(remote, 81920, context.CancellationToken).ConfigureAwait(false);
                         }
                         await fileOps.ExtractZipFileAsync(tempZipFileName, tempDirectoryName, true).ConfigureAwait(false);
 
@@ -148,11 +148,23 @@ namespace Inedo.Extensions.Operations.ProGet
                         InstalledUsing = $"{Extension.Product}/{Extension.ProductVersion} (InedoCore/{Extension.Version})"
                     };
 
-                    await registry.LockAsync(context.CancellationToken).ConfigureAwait(false);
-                    await registry.RegisterPackageAsync(package, context.CancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        using (var cancellationTokenSource = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10)))
+                        using (context.CancellationToken.Register(() => cancellationTokenSource.Cancel()))
+                        {
+                            await registry.LockAsync(cancellationTokenSource.Token).ConfigureAwait(false);
 
-                    // doesn't need to be in a finally because dispose will unlock if necessary, but prefer doing it asynchronously
-                    await registry.UnlockAsync().ConfigureAwait(false);
+                            await registry.RegisterPackageAsync(package, context.CancellationToken).ConfigureAwait(false);
+
+                            // doesn't need to be in a finally because dispose will unlock if necessary, but prefer doing it asynchronously
+                            await registry.UnlockAsync().ConfigureAwait(false);
+                        }
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        log.LogWarning("Registering the package in the machine package registry timed out.");
+                    }
                 }
             }
             catch (ProGetException ex)

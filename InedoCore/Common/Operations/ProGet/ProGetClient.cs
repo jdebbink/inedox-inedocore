@@ -3,17 +3,17 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
-using System.Threading.Tasks;
-using System.Reflection;
-using System.Text;
-using Inedo.IO;
-using Inedo.Diagnostics;
-using Newtonsoft.Json;
-using System.Text.RegularExpressions;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Reflection;
 using System.Security;
-using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
+using Inedo.Diagnostics;
+using Inedo.IO;
 #if BuildMaster
 using Inedo.BuildMaster.Extensibility.Operations;
 using Inedo.BuildMaster.Data;
@@ -29,7 +29,7 @@ namespace Inedo.Extensions.Operations.ProGet
     {
         private static readonly LazyRegex FeedNameRegex = new LazyRegex(@"(?<1>(https?://)?[^/]+)/upack(/?(?<2>.+))", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.ExplicitCapture);
 
-        public ProGetClient(string serverUrl, string feedName, string userName, string password, ILogger log = null)
+        public ProGetClient(string serverUrl, string feedName, string userName, string password, ILogger log = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (string.IsNullOrEmpty(serverUrl))
                 throw new ProGetException(400, "A ProGet server URL must be specified for this operation either in the operation itself or in the credential.");
@@ -41,6 +41,7 @@ namespace Inedo.Extensions.Operations.ProGet
             this.FeedUrl = result.feedUrl;
             this.FeedName = result.feedName;
             this.ServerUrl = serverUrl.TrimEnd('/') + '/';
+            this.CancellationToken = cancellationToken;
         }
 
         public string FeedUrl { get; }
@@ -49,6 +50,7 @@ namespace Inedo.Extensions.Operations.ProGet
         public string UserName { get; }
         public string Password { get; }
         public ILogger Log { get; }
+        private CancellationToken CancellationToken { get; }
 
         public string GetViewPackageUrl(PackageName id, string version)
         {
@@ -61,7 +63,7 @@ namespace Inedo.Extensions.Operations.ProGet
         public async Task<string[]> GetFeedNamesAsync()
         {
             using (var client = this.CreateClient())
-            using (var response = await client.GetAsync(this.FeedUrl + "?list-feeds").ConfigureAwait(false))
+            using (var response = await client.GetAsync(this.FeedUrl + "?list-feeds", HttpCompletionOption.ResponseHeadersRead, this.CancellationToken).ConfigureAwait(false))
             {
                 await HandleError(response).ConfigureAwait(false);
 
@@ -77,7 +79,7 @@ namespace Inedo.Extensions.Operations.ProGet
         public async Task<ProGetPackageInfo[]> GetPackagesAsync()
         {
             using (var client = this.CreateClient())
-            using (var response = await client.GetAsync(this.FeedUrl + "packages").ConfigureAwait(false))
+            using (var response = await client.GetAsync(this.FeedUrl + "packages", HttpCompletionOption.ResponseHeadersRead, this.CancellationToken).ConfigureAwait(false))
             {
                 await HandleError(response).ConfigureAwait(false);
 
@@ -96,7 +98,7 @@ namespace Inedo.Extensions.Operations.ProGet
                 throw new ArgumentNullException(nameof(id));
 
             using (var client = this.CreateClient())
-            using (var response = await client.GetAsync(this.FeedUrl + $"packages?group={Uri.EscapeDataString(id.Group)}&name={Uri.EscapeDataString(id.Name)}").ConfigureAwait(false))
+            using (var response = await client.GetAsync(this.FeedUrl + $"packages?group={Uri.EscapeDataString(id.Group)}&name={Uri.EscapeDataString(id.Name)}", HttpCompletionOption.ResponseHeadersRead, this.CancellationToken).ConfigureAwait(false))
             {
                 await HandleError(response).ConfigureAwait(false);
 
@@ -115,18 +117,16 @@ namespace Inedo.Extensions.Operations.ProGet
                 throw new ArgumentNullException(nameof(id));
 
             using (var client = this.CreateClient())
+            using (var response = await client.GetAsync(this.FeedUrl + $"versions?group={Uri.EscapeDataString(id.Group)}&name={Uri.EscapeDataString(id.Name)}&version={Uri.EscapeDataString(version)}&includeFileList=true", HttpCompletionOption.ResponseHeadersRead, this.CancellationToken).ConfigureAwait(false))
             {
-                using (var response = await client.GetAsync(this.FeedUrl + $"versions?group={Uri.EscapeDataString(id.Group)}&name={Uri.EscapeDataString(id.Name)}&version={Uri.EscapeDataString(version)}&includeFileList=true").ConfigureAwait(false))
-                {
-                    await HandleError(response).ConfigureAwait(false);
+                await HandleError(response).ConfigureAwait(false);
 
-                    using (var responseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                    using (var streamReader = new StreamReader(responseStream, InedoLib.UTF8Encoding))
-                    using (var jsonReader = new JsonTextReader(streamReader))
-                    {
-                        var serializer = JsonSerializer.Create();
-                        return serializer.Deserialize<ProGetPackageVersionInfo>(jsonReader);
-                    }
+                using (var responseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                using (var streamReader = new StreamReader(responseStream, InedoLib.UTF8Encoding))
+                using (var jsonReader = new JsonTextReader(streamReader))
+                {
+                    var serializer = JsonSerializer.Create();
+                    return serializer.Deserialize<ProGetPackageVersionInfo>(jsonReader);
                 }
             }
         }
@@ -142,24 +142,22 @@ namespace Inedo.Extensions.Operations.ProGet
                 url = id.Group + "/" + url;
 
             using (var client = this.CreateClient(deployInfo))
+            using (var response = await client.GetAsync(this.FeedUrl + "download/" + url, HttpCompletionOption.ResponseHeadersRead, this.CancellationToken).ConfigureAwait(false))
             {
-                using (var response = await client.GetAsync(this.FeedUrl + "download/" + url).ConfigureAwait(false))
-                {
-                    await HandleError(response).ConfigureAwait(false);
+                await HandleError(response).ConfigureAwait(false);
 
-                    using (var responseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                    {
-                        var tempStream = TemporaryStream.Create(response.Content.Headers.ContentLength ?? 0L);
-                        await responseStream.CopyToAsync(tempStream).ConfigureAwait(false);
-                        tempStream.Position = 0;
-                        return tempStream;
-                    }
+                using (var responseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                {
+                    var tempStream = TemporaryStream.Create(response.Content.Headers.ContentLength ?? 0L);
+                    await responseStream.CopyToAsync(tempStream, 81920, this.CancellationToken).ConfigureAwait(false);
+                    tempStream.Position = 0;
+                    return tempStream;
                 }
             }
         }
         public async Task<ZipArchive> DownloadPackageAsync(PackageName id, string version, PackageDeploymentData deployInfo)
         {
-            var stream = await this.DownloadPackageContentAsync(id, version, deployInfo);
+            var stream = await this.DownloadPackageContentAsync(id, version, deployInfo).ConfigureAwait(false);
             return new ZipArchive(stream, ZipArchiveMode.Read);
         }
         public async Task PushPackageAsync(string group, string name, string version, ProGetPackagePushData packageData, Stream content)
@@ -180,7 +178,7 @@ namespace Inedo.Extensions.Operations.ProGet
             {
                 streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
 
-                using (var response = await client.PostAsync(this.FeedUrl + "upload/" + url + packageData.ToQueryString(), streamContent).ConfigureAwait(false))
+                using (var response = await client.PostAsync(this.FeedUrl + "upload/" + url + packageData.ToQueryString(), streamContent, this.CancellationToken).ConfigureAwait(false))
                 {
                     await HandleError(response).ConfigureAwait(false);
                 }
@@ -196,7 +194,7 @@ namespace Inedo.Extensions.Operations.ProGet
                 throw new ArgumentNullException(nameof(fromFeed));
             if (string.IsNullOrWhiteSpace(toFeed))
                 throw new ArgumentNullException(nameof(toFeed));
-            
+
             using (var client = this.CreateClient(apiKey: apiKey))
             {
                 string json = JsonConvert.SerializeObject(
@@ -210,12 +208,12 @@ namespace Inedo.Extensions.Operations.ProGet
                         comments = comments
                     }
                 );
-                
+
                 using (var streamContent = new StringContent(json))
                 {
                     streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/json");
 
-                    using (var response = await client.PostAsync(this.ServerUrl + "api/promotions/promote", streamContent).ConfigureAwait(false))
+                    using (var response = await client.PostAsync(this.ServerUrl + "api/promotions/promote", streamContent, this.CancellationToken).ConfigureAwait(false))
                     {
                         await HandleError(response).ConfigureAwait(false);
                     }
@@ -235,7 +233,7 @@ namespace Inedo.Extensions.Operations.ProGet
             {
                 client = new HttpClient();
             }
-            
+
             client.DefaultRequestHeaders.UserAgent.Clear();
             client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(typeof(Operation).Assembly.GetCustomAttribute<AssemblyProductAttribute>().Product, typeof(Operation).Assembly.GetName().Version.ToString()));
             client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("InedoCore", typeof(ProGetClient).Assembly.GetName().Version.ToString()));
@@ -254,37 +252,6 @@ namespace Inedo.Extensions.Operations.ProGet
             }
 
             return client;
-        }
-        private HttpWebRequest CreateRequest(string relativePath, PackageDeploymentData deployInfo = null)
-        {
-            string url = this.FeedUrl + relativePath;
-            this.Log.LogDebug("Creating request: " + url);
-
-            var asm = typeof(Operation).Assembly;
-            var request = WebRequest.CreateHttp(url);
-            request.UserAgent = $"{asm.GetCustomAttribute<AssemblyProductAttribute>()?.Product} {asm.GetName().Version} ({Environment.OSVersion})";
-            request.AutomaticDecompression = DecompressionMethods.GZip;
-            if (!string.IsNullOrEmpty(this.UserName) && !string.IsNullOrEmpty(this.Password))
-            {
-                this.Log.LogDebug($"Using Basic Authentication; user name '{this.UserName}'.");
-                request.Headers.Add(HttpRequestHeader.Authorization, "Basic " + Convert.ToBase64String(InedoLib.UTF8Encoding.GetBytes(this.UserName + ":" + this.Password)));
-            }
-            else
-            {
-                this.Log.LogDebug($"Using integrated authentication; user account '{Environment.UserName}', domain '{Environment.UserDomainName}'.");
-                request.UseDefaultCredentials = true;
-                request.PreAuthenticate = true;
-            }
-            
-            if (deployInfo != null)
-            {
-                request.Headers.Add(PackageDeploymentData.Headers.Application, deployInfo.Application);
-                request.Headers.Add(PackageDeploymentData.Headers.Description, deployInfo.Description);
-                request.Headers.Add(PackageDeploymentData.Headers.Url, deployInfo.Url);
-                request.Headers.Add(PackageDeploymentData.Headers.Target, deployInfo.Target);
-            }
-
-            return request;
         }
         private static async Task HandleError(HttpResponseMessage response)
         {
@@ -367,31 +334,6 @@ namespace Inedo.Extensions.Operations.ProGet
             : base(message, ex)
         {
             this.StatusCode = statusCode;
-        }
-
-        public static ProGetException Wrap(WebException ex)
-        {
-            var response = (HttpWebResponse)ex.Response;
-            string message;
-            try
-            {
-                using (var stream = response.GetResponseStream())
-                using (var reader = new StreamReader(stream, InedoLib.UTF8Encoding))
-                {
-                    message = reader.ReadToEnd();
-
-                    if (response.StatusCode == HttpStatusCode.InternalServerError && message.StartsWith("<!DOCTYPE"))
-                    {
-                        message = "Invalid feed URL. Ensure the feed URL follows the format: http://{proget-server}/upack/{feed-name}";
-                    }
-                }
-            }
-            catch
-            {
-                message = "Unknown error.";
-            }
-
-            return new ProGetException((int)response.StatusCode, message, ex);
         }
 
         public int StatusCode { get; set; }

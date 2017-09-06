@@ -121,7 +121,7 @@ namespace Inedo.Extensions.Operations.ProGet
 
         protected override async Task<object> RemoteExecuteAsync(IRemoteOperationExecutionContext context)
         {
-            var client = new ProGetClient(this.Server, this.FeedName, this.UserName, this.Password, this);
+            var client = new ProGetClient(this.Server, this.FeedName, this.UserName, this.Password, this, context.CancellationToken);
 
             try
             {
