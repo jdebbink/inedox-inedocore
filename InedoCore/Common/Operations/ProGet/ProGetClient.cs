@@ -130,7 +130,7 @@ namespace Inedo.Extensions.Operations.ProGet
                 }
             }
         }
-        public async Task<Stream> DownloadPackageContentAsync(PackageName id, string version, PackageDeploymentData deployInfo)
+        public async Task<Stream> DownloadPackageContentAsync(PackageName id, string version, PackageDeploymentData deployInfo, Action<long, long> progressUpdate = null)
         {
             if (string.IsNullOrWhiteSpace(id?.Name))
                 throw new ArgumentNullException(nameof(id));
@@ -149,7 +149,15 @@ namespace Inedo.Extensions.Operations.ProGet
                 using (var responseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                 {
                     var tempStream = TemporaryStream.Create(response.Content.Headers.ContentLength ?? 0L);
-                    await responseStream.CopyToAsync(tempStream, 81920, this.CancellationToken).ConfigureAwait(false);
+                    var buffer = new byte[81920];
+                    int bytesRead;
+                    long position = 0;
+                    while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length, this.CancellationToken).ConfigureAwait(false)) != 0)
+                    {
+                        await tempStream.WriteAsync(buffer, 0, bytesRead, this.CancellationToken).ConfigureAwait(false);
+                        position += bytesRead;
+                        progressUpdate?.Invoke(position, response.Content.Headers.ContentLength ?? 0L);
+                    }
                     tempStream.Position = 0;
                     return tempStream;
                 }
